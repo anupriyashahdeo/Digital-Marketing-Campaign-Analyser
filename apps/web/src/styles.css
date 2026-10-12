@@ -1,0 +1,29 @@
+:root { --bg:#f4f6fb; --card:#fff; --text:#1b2333; --muted:#667085; --brand:#3b5bdb; --brand-d:#2f49b0;
+  --border:#d5dbe7; --err-bg:#fdecec; --err:#b42318; --ok-bg:#e8f6ee; --ok:#146c3a; }
+@media (prefers-color-scheme: dark) { :root { --bg:#10131a; --card:#181c26; --text:#e8ecf4; --muted:#9aa4b8;
+  --border:#2c3445; --err-bg:#3a1c1c; --err:#ff9b94; --ok-bg:#16301f; --ok:#7ddba0; --brand:#6d86f2; --brand-d:#566fe0; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+.auth-page { min-height:100vh; display:grid; place-items:center; padding:24px; }
+.auth-card { width:100%; max-width:400px; background:var(--card); border:1px solid var(--border);
+  border-radius:14px; padding:32px 28px; box-shadow:0 8px 30px rgba(0,0,0,.06); }
+.brand { font-weight:700; color:var(--brand); font-size:14px; letter-spacing:.3px; margin-bottom:18px; }
+h1 { font-size:24px; margin:0 0 6px; }
+.muted { color:var(--muted); font-size:14px; } .center { text-align:center; } .hint { color:var(--muted); font-size:12px; margin:-4px 0 12px; }
+.field { margin:16px 0 4px; } label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
+input { width:100%; padding:11px 12px; font-size:15px; border:1px solid var(--border); border-radius:8px;
+  background:transparent; color:var(--text); }
+input:focus { outline:2px solid var(--brand); outline-offset:1px; border-color:transparent; }
+.pw-row { position:relative; } .pw-row input { padding-right:60px; }
+.pw-row .link { position:absolute; right:10px; top:50%; transform:translateY(-50%); }
+.link { background:none; border:0; color:var(--brand); cursor:pointer; font-size:13px; padding:0; }
+a { color:var(--brand); text-decoration:none; } a:hover { text-decoration:underline; }
+.row-end { text-align:right; font-size:13px; margin:10px 0 14px; }
+button.primary { width:100%; padding:12px; margin-top:8px; background:var(--brand); color:#fff; border:0;
+  border-radius:8px; font-size:15px; font-weight:600; cursor:pointer; }
+button.primary:hover:not(:disabled) { background:var(--brand-d); } button.primary:disabled { opacity:.6; cursor:not-allowed; }
+.alert { padding:10px 12px; border-radius:8px; font-size:14px; margin:12px 0; }
+.alert.error { background:var(--err-bg); color:var(--err); } .alert.ok { background:var(--ok-bg); color:var(--ok); }
+.home { max-width:640px; margin:0 auto; padding:24px; }
+.home header { display:flex; justify-content:space-between; margin-bottom:32px; font-size:14px; }
+.home input { margin-bottom:12px; }

@@ -1,0 +1,7 @@
+version: v1
+questions:
+  - {id: hook_type, kind: choice, prompt: "What kind of hook opens the ad?", choices: [question, shock, story, offer, demo, celebrity, other]}
+  - {id: format, kind: choice, prompt: "What is the ad format?", choices: [testimonial, demo, explainer, ugc, cinematic, comparison, other]}
+  - {id: offer, kind: text, prompt: "What offer or incentive is made? Say 'none' if absent."}
+  - {id: cta, kind: text, prompt: "What is the call to action?"}
+  - {id: stop_scroll_score, kind: number, prompt: "Score 0-10 how likely the first 3 seconds stop a scroll."}

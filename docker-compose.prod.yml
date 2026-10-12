@@ -1,0 +1,7 @@
+# Production overrides: use managed Postgres/Redis/S3 (India region), no bind mounts.
+services:
+  api:
+    command: gunicorn ada.main:app -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:8000
+    volumes: []
+  worker:
+    deploy: {replicas: 2}

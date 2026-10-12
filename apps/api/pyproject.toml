@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ada"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110", "uvicorn[standard]", "pydantic[email]>=2", "pyjwt>=2.8", "pydantic-settings",
+  "sqlalchemy>=2", "alembic", "psycopg[binary]", "celery[redis]", "redis",
+  "pyyaml", "httpx", "python-multipart", "boto3", "sentry-sdk",
+]
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "ruff", "mypy"]
+media = ["playwright"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = ["B008"]
