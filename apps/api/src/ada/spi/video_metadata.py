@@ -13,8 +13,12 @@ class VideoMeta(BaseModel):
     views: int = 0
     likes: int = 0
     comments: int = 0
+    channel_title: str = ""
+    thumbnail_url: str = ""
+    duration_seconds: int = 0
 
 
 class VideoMetadataSource(Protocol):
     async def get_videos(self, video_ids: list[str]) -> list[VideoMeta]: ...
-    async def channel_recent(self, channel_id: str, n: int = 30) -> list[VideoMeta]: ...
+    async def search(self, query: str, region: str, language: str, n: int = 10,
+                     order: str = "relevance") -> list[VideoMeta]: ...

@@ -1,30 +1,5 @@
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
 from ada.api.v1 import auth as auth_mod
-from ada.db.models import Base
-from ada.db.session import get_db
-from ada.main import app
 from ada.security.tokens import make_reset_token
-
-
-@pytest.fixture()
-def client():
-    eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(eng)
-    Session = sessionmaker(eng, expire_on_commit=False)
-
-    def override():
-        with Session() as s:
-            yield s
-
-    app.dependency_overrides[get_db] = override
-    auth_mod._FAILS.clear()
-    yield TestClient(app), Session
-    app.dependency_overrides.clear()
 
 
 def signup(c, email="A@Example.com", pw="password123"):
@@ -64,6 +39,17 @@ def test_forgot_password_does_not_reveal_accounts(client):
     assert a == b
 
 
+def test_forgot_password_emails_reset_link(client, monkeypatch):
+    c, _ = client
+    signup(c)
+    sent = []
+    monkeypatch.setattr(auth_mod.mailer, "send", lambda to, subject, body: sent.append((to, body)))
+    c.post("/api/v1/auth/forgot-password", json={"email": "a@example.com"})
+    c.post("/api/v1/auth/forgot-password", json={"email": "nobody@example.com"})
+    assert len(sent) == 1
+    assert sent[0][0] == "a@example.com" and "/reset-password?token=" in sent[0][1]
+
+
 def test_reset_flow_and_single_use(client):
     c, Session = client
     signup(c)
@@ -76,3 +62,34 @@ def test_reset_flow_and_single_use(client):
     assert c.post("/api/v1/auth/reset-password", json={"token": token, "password": "another-pass1"}).status_code == 400
     assert c.post("/api/v1/auth/login", json={"email": "a@example.com", "password": "newpassword1"}).status_code == 200
     assert c.post("/api/v1/auth/reset-password", json={"token": "garbage", "password": "newpassword1"}).status_code == 400
+
+
+def test_reset_signs_out_existing_sessions(client):
+    c, Session = client
+    signup(c)                                     # c now holds a session cookie
+    assert c.get("/api/v1/auth/me").status_code == 200
+    from ada.db.models import User
+    with Session() as s:
+        u = s.query(User).one()
+        token = make_reset_token(u.id, u.password_hash)
+    c.post("/api/v1/auth/reset-password", json={"token": token, "password": "newpassword1"})
+    assert c.get("/api/v1/auth/me").status_code == 401   # old cookie no longer works
+
+
+def test_forgot_password_caps_emails_per_account(client, monkeypatch):
+    c, _ = client
+    signup(c)
+    sent = []
+    monkeypatch.setattr(auth_mod.mailer, "send", lambda to, subject, body: sent.append(to))
+    msgs = {c.post("/api/v1/auth/forgot-password", json={"email": "a@example.com"}).text for _ in range(5)}
+    assert len(sent) == 3 and len(msgs) == 1     # extra requests are dropped silently
+
+
+def test_forgot_password_throttles_per_ip(client):
+    c, _ = client
+    for i in range(20):
+        assert c.post("/api/v1/auth/forgot-password", json={"email": f"x{i}@example.com"}).status_code == 200
+    assert c.post("/api/v1/auth/forgot-password", json={"email": "y@example.com"}).status_code == 429
+
+
+# Sign-in checks for workspace and run routes live in test_workspaces.py

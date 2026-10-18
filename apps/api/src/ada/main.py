@@ -1,25 +1,57 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
-from ada.api.v1 import auth, events, imports, runs
+from ada.api.v1 import auth, runs, workspaces, youtube
 from ada.config import settings
 from ada.db.models import Base
 from ada.db.session import engine
 from ada.observability.setup import init
 
+# ---------------------------------------------------------------------------
+# STEP 1: login.  STEP 2 (active): workspaces, dashboard, start a run.
+# YouTube explorer (active): keyword search / link lookup with public stats.
+# Later steps are commented out below. See docs/ROADMAP.md for the order.
+# ---------------------------------------------------------------------------
+# STEP 3+: uncomment when you build CSV import / live events. Both must be moved under
+# /workspaces/{workspace_id}/... and use workspace_member, like runs.py, before switching on.
+# from ada.api.v1 import events, imports
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",          # API responses hold private workspace data
+}
+
 
 def create_app() -> FastAPI:
     init()
-    if settings.app_env == "prod" and settings.jwt_secret == "dev-only-change-me":
-        raise RuntimeError("Set JWT_SECRET before running in production")
+    if settings.app_env == "prod" and (settings.jwt_secret == "dev-only-change-me"
+                                       or len(settings.jwt_secret) < 32):
+        raise RuntimeError("Set JWT_SECRET (32+ random chars) before running in production")
     if settings.app_env == "dev":
         Base.metadata.create_all(engine)   # production uses Alembic migrations instead
-    app = FastAPI(title="Ad Campaign Analyser", version="0.1.0")
+    app = FastAPI(title="Ad Campaign Analyser", version="0.1.0",
+                  # Don't publish the API map in production
+                  docs_url=None if settings.app_env == "prod" else "/docs",
+                  redoc_url=None, openapi_url=None if settings.app_env == "prod" else "/openapi.json")
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        resp = await call_next(request)
+        for k, v in SECURITY_HEADERS.items():
+            resp.headers.setdefault(k, v)
+        if settings.app_env == "prod":
+            resp.headers.setdefault("Strict-Transport-Security",
+                                    "max-age=63072000; includeSubDomains")
+        return resp
 
     @app.get("/health")
     def health():
         return {"status": "ok", "region": settings.region, "env": settings.app_env}
 
-    for r in (auth.router, runs.router, events.router, imports.router):
+    # Every router except /health and /auth checks sign-in inside its own dependencies
+    # (current_user / workspace_member), so access rules sit next to the routes they guard.
+    for r in (auth.router, workspaces.router, runs.router, youtube.router):
         app.include_router(r, prefix="/api/v1")
     return app
 

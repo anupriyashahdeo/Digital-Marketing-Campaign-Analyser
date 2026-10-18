@@ -16,9 +16,11 @@ def _fingerprint(password_hash: str) -> str:
     return hashlib.sha256(password_hash.encode()).hexdigest()[:16]
 
 
-def make_session_token(user_id: int) -> str:
+def make_session_token(user_id: int, password_hash: str) -> str:
+    """Also bound to the password hash, so changing the password signs out every device."""
     exp = _now() + timedelta(minutes=settings.session_minutes)
-    return jwt.encode({"sub": str(user_id), "purpose": "session", "exp": exp},
+    return jwt.encode({"sub": str(user_id), "purpose": "session",
+                       "fph": _fingerprint(password_hash), "exp": exp},
                       settings.jwt_secret, algorithm=ALGO)
 
 
@@ -38,5 +40,5 @@ def decode(token: str, purpose: str) -> dict | None:
     return data if data.get("purpose") == purpose else None
 
 
-def reset_token_matches(data: dict, password_hash: str) -> bool:
+def token_matches_password(data: dict, password_hash: str) -> bool:
     return data.get("fph") == _fingerprint(password_hash)

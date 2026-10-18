@@ -1,36 +1,44 @@
 services:
+  # ---- STEP 1 (active): login needs only the database, the API and the website ----
   postgres:
     image: postgres:16
     environment: {POSTGRES_USER: ada, POSTGRES_PASSWORD: ada, POSTGRES_DB: ada}
     ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck: {test: ["CMD-SHELL","pg_isready -U ada"], interval: 5s, retries: 10}
-  redis:
-    image: redis:7
-    ports: ["6379:6379"]
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
-    ports: ["9000:9000","9001:9001"]
-    volumes: [miniodata:/data]
   api:
     build: {context: ., dockerfile: infra/docker/api.Dockerfile}
     env_file: .env
-    command: uvicorn ada.main:app --host 0.0.0.0 --port 8000 --reload
+    environment: {DATABASE_URL: "postgresql+psycopg://ada:ada@postgres:5432/ada"}   # .env uses localhost for local runs
+    command: uvicorn 
     ports: ["8000:8000"]
-    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_started}}
+    depends_on: {postgres: {condition: service_healthy}}
+    # STEP 2+: add  redis: {condition: service_started}  to depends_on above
     volumes: ["./apps/api/src:/app/src"]
-  worker:
-    build: {context: ., dockerfile: infra/docker/worker.Dockerfile}
-    env_file: .env
-    command: celery -A ada.workers.celery_app worker -l info -Q default,media,ai
-    depends_on: [postgres, redis]
-  scheduler:
-    build: {context: ., dockerfile: infra/docker/api.Dockerfile}
-    env_file: .env
-    command: celery -A ada.workers.celery_app beat -l info
-    depends_on: [redis]
   web:
     build: {context: ., dockerfile: infra/docker/web.Dockerfile}
+    environment: {API_URL: "http://api:8000"}
     ports: ["5173:5173"]
-volumes: {pgdata: {}, miniodata: {}}
+
+  # ---- STEP 2+: queue, file storage and background workers ----
+  # redis:
+  #   image: redis:7
+  #   ports: ["6379:6379"]
+  # minio:
+  #   image: minio/minio
+  #   command: server /data --console-address ":9001"
+  #   ports: ["9000:9000","9001:9001"]
+  #   volumes: [miniodata:/data]
+  # worker:
+  #   build: {context: ., dockerfile: infra/docker/worker.Dockerfile}
+  #   env_file: .env
+  #   command: celery -A ada.workers.celery_app worker -l info -Q default,media,ai
+  #   depends_on: [postgres, redis]
+  # scheduler:
+  #   build: {context: ., dockerfile: infra/docker/api.Dockerfile}
+  #   env_file: .env
+  #   command: celery -A ada.workers.celery_app beat -l info
+  #   depends_on: [redis]
+
+volumes: {pgdata: {}}
+# STEP 2+: volumes: {pgdata: {}, miniodata: {}}

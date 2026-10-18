@@ -2,7 +2,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Finds the repo-root .env whether you start the API from the repo root or from apps/api
+    model_config = SettingsConfigDict(env_file=(".env", "../../.env"), extra="ignore")
     app_env: str = "dev"
     region: str = "IN"            # change this to add a country (plus an adapter)
     language: str = "en"
@@ -20,6 +21,12 @@ class Settings(BaseSettings):
     session_minutes: int = 60 * 24 * 7
     reset_minutes: int = 30
     frontend_url: str = "http://localhost:5173"
+    mail_provider: str = "console"   # console (prints to log) | smtp
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    mail_from: str = ""              # e.g. "Ad Campaign Analyser <you@gmail.com>"
 
 
 settings = Settings()

@@ -1,11 +1,13 @@
-import { useState, type FormEvent } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import AuthLayout from "../components/AuthLayout";
 import PasswordInput from "../components/PasswordInput";
 
 export default function ResetPassword() {
-  const token = useSearchParams()[0].get("token") ?? "";
+  // Read the token once, then drop it from the address bar so it isn't kept in history
+  const [token] = useState(() => new URLSearchParams(window.location.search).get("token") ?? "");
+  useEffect(() => { window.history.replaceState(null, "", window.location.pathname); }, []);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [message, setMessage] = useState("");

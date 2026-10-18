@@ -2,14 +2,34 @@
 
 Find YouTube ads -> turn into text -> ask fixed questions -> double-check -> score -> dashboard/report.
 
-## Quick start
+## Current step: login only
+We are building one step at a time. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Everything after login is commented out (search for `STEP 2+`).
+
+### Run it on your machine (no Docker)
+Terminal 1 - API (uses a local SQLite file, no database setup needed):
+```bash
+cd apps/api
+python -m venv .venv
+.venv\Scripts\activate          # Mac/Linux: source .venv/bin/activate
+pip install -e ".[dev]"
+uvicorn ada.main:app --reload --port 8000
+```
+Terminal 2 - website:
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+Open http://localhost:5173. Forgot-password links are printed in Terminal 1.
+
+Tests: `cd apps/api && pytest -q`
+
+### Or with Docker (PostgreSQL)
 ```bash
 cp .env.example .env
-make test        # backend unit tests (no Docker needed)
-make dev         # postgres, redis, minio, api (:8000), worker, web (:5173)
-make migrate     # then: make revision m="init" first time
+make dev
 ```
-API docs: http://localhost:8000/docs
 
 ## Status
 Foundation built: SPI contracts, scoring labeler, analyse+escalation pipeline, cache,

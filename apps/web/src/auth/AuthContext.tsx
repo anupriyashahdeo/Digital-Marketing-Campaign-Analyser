@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, type User } from "../api/client";
+import { api, setUnauthorizedHandler, type User } from "../api/client";
 
 type Ctx = {
   user: User | null;
@@ -16,6 +16,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setUnauthorizedHandler(() => setUser(null));   // expired session -> back to the login page
     api.me().then(setUser).catch(() => setUser(null)).finally(() => setLoading(false));
   }, []);
 
