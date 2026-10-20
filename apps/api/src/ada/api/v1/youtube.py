@@ -1,11 +1,19 @@
 """YouTube data extraction: search by keyword, or paste video links, and get public stats."""
+import asyncio
 import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from ada.api.schemas import YouTubeSearchOut, YouTubeSummary, YouTubeVideoOut
+from ada.api.schemas import (
+    YouTubeCommentOut,
+    YouTubeCommentsOut,
+    YouTubeSearchOut,
+    YouTubeSummary,
+    YouTubeVideoComments,
+    YouTubeVideoOut,
+)
 from ada.db.models import Membership, Workspace
 from ada.db.session import get_db
 from ada.providers.registry import get_youtube
@@ -17,6 +25,7 @@ router = APIRouter(prefix="/workspaces/{workspace_id}/youtube", tags=["youtube"]
 
 _LINK_ID = re.compile(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})")
 _BARE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_NOT_SET_UP = "YouTube isn't set up yet. Add YOUTUBE_API_KEY to .env and restart the API."
 
 
 def video_ids_in(text: str) -> list[str]:
@@ -60,9 +69,7 @@ async def search(q: str = Query(min_length=2, max_length=500),
                  m: Membership = Depends(workspace_member), db: Session = Depends(get_db),
                  yt: YouTubeDataClient | None = Depends(get_youtube)):
     if yt is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "YouTube isn't set up yet. Add YOUTUBE_API_KEY to .env and restart "
-                            "the API.")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, _NOT_SET_UP)
     q = " ".join(q.split())
     ids = video_ids_in(q)
     try:
@@ -76,3 +83,26 @@ async def search(q: str = Query(min_length=2, max_length=500),
     videos = [_out(v) for v in metas]
     return YouTubeSearchOut(query=q, mode="lookup" if ids else "search", videos=videos,
                             summary=_summary(videos))
+
+
+@router.get("/comments", response_model=YouTubeCommentsOut)
+async def comments(ids: str = Query(min_length=11, max_length=2000,
+                                    description="Comma-separated video ids (max 50)"),
+                   limit: int = Query(10, ge=1, le=100),
+                   m: Membership = Depends(workspace_member),
+                   yt: YouTubeDataClient | None = Depends(get_youtube)):
+    """Top comments (YouTube's 'Top comments' order) for each listed video. 1 quota unit each."""
+    if yt is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, _NOT_SET_UP)
+    video_ids = list(dict.fromkeys(i for i in ids.split(",") if _BARE_ID.fullmatch(i)))
+    if not video_ids or len(video_ids) > 50:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Send 1 to 50 video ids.")
+    try:
+        results = await asyncio.gather(*(yt.top_comments(v, limit) for v in video_ids))
+    except YouTubeError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+    return YouTubeCommentsOut(videos=[
+        YouTubeVideoComments(video_id=v, comments_disabled=found is None,
+                             comments=[YouTubeCommentOut(**c.model_dump()) for c in found or []])
+        for v, found in zip(video_ids, results, strict=True)
+    ])

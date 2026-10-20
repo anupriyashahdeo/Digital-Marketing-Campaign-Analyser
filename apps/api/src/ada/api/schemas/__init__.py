@@ -143,6 +143,25 @@ class YouTubeSummary(BaseModel):
     top_video_id: str | None
 
 
+class YouTubeCommentOut(BaseModel):
+    comment_id: str
+    author: str
+    text: str
+    likes: int
+    replies: int
+    published_at: UtcDatetime
+
+
+class YouTubeVideoComments(BaseModel):
+    video_id: str
+    comments_disabled: bool         # True: the video has comments turned off, list is empty
+    comments: list[YouTubeCommentOut]
+
+
+class YouTubeCommentsOut(BaseModel):
+    videos: list[YouTubeVideoComments]
+
+
 class YouTubeSearchOut(BaseModel):
     query: str
     mode: str                       # "search" (keywords) | "lookup" (pasted links / ids)

@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +28,16 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: str = ""
     mail_from: str = ""              # e.g. "Ad Campaign Analyser <you@gmail.com>"
+    web_dist: str = ""               # built website folder; set in the production image only
+
+    @field_validator("database_url")
+    @classmethod
+    def _psycopg_driver(cls, v: str) -> str:
+        """Hosts (Neon, Render) hand out postgres:// URLs; SQLAlchemy needs the psycopg driver."""
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                return "postgresql+psycopg://" + v[len(prefix):]
+        return v
 
 
 settings = Settings()

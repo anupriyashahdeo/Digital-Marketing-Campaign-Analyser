@@ -1,0 +1,18 @@
+# Render Blueprint: Render reads this to create the web service. See docs/deploy.md.
+services:
+  - type: web
+    name: ad-campaign-analyser
+    runtime: docker
+    plan: free
+    region: singapore              # closest Render region to India
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true        # Render creates a long random secret
+      - key: DATABASE_URL          # paste the Neon connection string
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: FRONTEND_URL          # your Render URL, e.g. https://ad-campaign-analyser.onrender.com
+        sync: false

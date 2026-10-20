@@ -1,5 +1,6 @@
 """YouTube Data API v3: public video metadata only (title, channel, views, likes, comments).
-Never downloads video or audio. Quota: search = 100 units, videos.list = 1 unit, 10,000/day free.
+Never downloads video or audio. Quota: search = 100 units, videos.list = 1 unit,
+commentThreads.list = 1 unit per video, 10,000/day free.
 """
 import re
 import time
@@ -7,7 +8,7 @@ from datetime import datetime
 
 import httpx
 
-from ada.spi.video_metadata import VideoMeta
+from ada.spi.video_metadata import VideoComment, VideoMeta
 
 API = "https://www.googleapis.com/youtube/v3"
 CACHE_SECONDS = 15 * 60          # same search within 15 min is free (saves quota)
@@ -18,6 +19,10 @@ class YouTubeError(Exception):
     """Something the user should see (bad key, quota used up, YouTube down)."""
 
 
+class CommentsOff(Exception):
+    """The video has comments turned off (or is gone), so there's nothing to list."""
+
+
 def parse_duration(iso: str) -> int:
     """'PT1M5S' -> 65 seconds."""
     m = _ISO_DURATION.fullmatch(iso or "")
@@ -25,6 +30,17 @@ def parse_duration(iso: str) -> int:
         return 0
     d, h, mi, s = (int(x or 0) for x in m.groups())
     return d * 86400 + h * 3600 + mi * 60 + s
+
+
+def _to_comment(thread: dict) -> VideoComment:
+    top = thread["snippet"]["topLevelComment"]
+    sn = top["snippet"]
+    return VideoComment(
+        comment_id=top["id"], author=sn.get("authorDisplayName", ""),
+        text=sn.get("textOriginal") or sn.get("textDisplay", ""),
+        likes=int(sn.get("likeCount", 0)), replies=int(thread["snippet"].get("totalReplyCount", 0)),
+        published_at=datetime.fromisoformat(sn["publishedAt"]),
+    )
 
 
 def _to_meta(item: dict) -> VideoMeta:
@@ -46,6 +62,7 @@ class YouTubeDataClient:
     def __init__(self, api_key: str, timeout: float = 10.0):
         self.key, self.timeout = api_key, timeout
         self._cache: dict[tuple, tuple[float, list[VideoMeta]]] = {}
+        self._comment_cache: dict[tuple, tuple[float, list[VideoComment] | None]] = {}
 
     async def _get(self, path: str, **params) -> dict:
         async with httpx.AsyncClient(timeout=self.timeout) as c:
@@ -53,8 +70,11 @@ class YouTubeDataClient:
                 r = await c.get(f"{API}/{path}", params={**params, "key": self.key})
             except httpx.HTTPError as e:
                 raise YouTubeError("Couldn't reach YouTube. Try again in a minute.") from e
-        if r.status_code == 403:
+        if r.status_code in (403, 404):
             reason = (r.json().get("error", {}).get("errors") or [{}])[0].get("reason", "")
+            if reason in ("commentsDisabled", "videoNotFound"):
+                raise CommentsOff(reason)
+        if r.status_code == 403:
             if "quota" in reason.lower():
                 raise YouTubeError("Today's YouTube quota is used up. It resets at midnight "
                                    "Pacific time.")
@@ -83,3 +103,17 @@ class YouTubeDataClient:
         videos = await self.get_videos(ids)
         self._cache[key] = (time.monotonic(), videos)
         return videos
+
+    async def top_comments(self, video_id: str, n: int = 10) -> list[VideoComment] | None:
+        """YouTube's own 'Top comments' order. None when the video has comments turned off."""
+        key = (video_id, n)
+        if (hit := self._comment_cache.get(key)) and time.monotonic() - hit[0] < CACHE_SECONDS:
+            return hit[1]
+        try:
+            data = await self._get("commentThreads", part="snippet", videoId=video_id,
+                                   order="relevance", maxResults=n, textFormat="plainText")
+            comments = [_to_comment(t) for t in data.get("items", [])]
+        except CommentsOff:
+            comments = None
+        self._comment_cache[key] = (time.monotonic(), comments)
+        return comments

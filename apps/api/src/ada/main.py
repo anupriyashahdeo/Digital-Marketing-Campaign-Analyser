@@ -1,4 +1,8 @@
-from fastapi import FastAPI, Request
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from ada.api.v1 import auth, runs, workspaces, youtube
 from ada.config import settings
@@ -38,6 +42,8 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         resp = await call_next(request)
+        if request.url.path.startswith("/assets/"):   # hashed filenames, safe to cache forever
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         for k, v in SECURITY_HEADERS.items():
             resp.headers.setdefault(k, v)
         if settings.app_env == "prod":
@@ -53,7 +59,24 @@ def create_app() -> FastAPI:
     # (current_user / workspace_member), so access rules sit next to the routes they guard.
     for r in (auth.router, workspaces.router, runs.router, youtube.router):
         app.include_router(r, prefix="/api/v1")
+    if settings.web_dist:
+        _serve_website(app, Path(settings.web_dist).resolve())
     return app
+
+
+def _serve_website(app: FastAPI, dist: Path) -> None:
+    """Production: the API also serves the built React app, so site and API share one URL."""
+    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def website(path: str):
+        if path.startswith("api/"):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        f = (dist / path).resolve()
+        if path and f.is_file() and f.is_relative_to(dist):
+            return FileResponse(f)
+        # Any other path is a page of the app (e.g. /youtube); React Router picks it up
+        return FileResponse(dist / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 app = create_app()

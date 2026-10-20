@@ -1,10 +1,13 @@
-import { useMemo, useState, type FormEvent } from "react";
-import { api, type YouTubeOrder, type YouTubeResult, type YouTubeVideo } from "../api/client";
+import { Fragment, useMemo, useState, type FormEvent } from "react";
+import { api, type YouTubeOrder, type YouTubeResult, type YouTubeComment, type YouTubeVideo, type YouTubeVideoComments } from "../api/client";
 import Tile from "../components/Tile";
 import { fmtCompact, fmtDate, fmtDuration, fmtNum, fmtPct } from "../lib/format";
 import { useWorkspace } from "../workspace/WorkspaceContext";
 
 type SortKey = "views" | "likes" | "comments" | "engagement_rate" | "published_at";
+
+const TOP_N = 10;
+type CommentsByVideo = Record<string, YouTubeVideoComments>;
 
 const COLUMNS: [SortKey, string][] = [
   ["published_at", "Published"], ["views", "Views"], ["likes", "Likes"],
@@ -21,15 +24,36 @@ export default function YouTube() {
   const [sort, setSort] = useState<SortKey>("views");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [comments, setComments] = useState<CommentsByVideo | null>(null);
+  const [commentsBusy, setCommentsBusy] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (q.trim().length < 2) return setError("Enter a keyword or paste a YouTube link.");
     setError("");
+    setComments(null);
     setBusy(true);
     try { setResult(await api.youtubeSearch(workspace!.id, q.trim(), limit, order, language)); }
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
+  }
+
+  async function loadComments(): Promise<CommentsByVideo | null> {
+    setError("");
+    setCommentsBusy(true);
+    try {
+      const r = await api.youtubeComments(workspace!.id, result!.videos.map((v) => v.video_id), TOP_N);
+      const byVideo = Object.fromEntries(r.videos.map((v) => [v.video_id, v]));
+      setComments(byVideo);
+      return byVideo;
+    } catch (err) { setError((err as Error).message); return null; }
+    finally { setCommentsBusy(false); }
+  }
+
+  // One CSV: each video's stats plus its top comments in the same row
+  async function download() {
+    const byVideo = comments ?? await loadComments();
+    if (byVideo) downloadCsv(videos, byVideo, result!.query);
   }
 
   const videos = useMemo(() => {
@@ -48,7 +72,9 @@ export default function YouTube() {
           <p className="muted">Search by keyword or paste video links to pull public stats.</p>
         </div>
         {videos.length > 0 && (
-          <button className="secondary" onClick={() => downloadCsv(videos, result!.query)}>Download CSV</button>
+          <button className="secondary" onClick={download} disabled={commentsBusy}>
+            {commentsBusy ? "Preparing CSV…" : "Download CSV"}
+          </button>
         )}
       </div>
 
@@ -99,7 +125,17 @@ export default function YouTube() {
 
       {result && (
         <section className="card">
-          <div className="card-head"><h2>Videos</h2><span className="muted small">Click a column to sort</span></div>
+          <div className="card-head">
+            <h2>Videos</h2>
+            <div className="head-actions">
+              <span className="muted small">Click a column to sort</span>
+              {videos.length > 0 && (
+                <button className="secondary" onClick={loadComments} disabled={commentsBusy}>
+                  {commentsBusy ? "Fetching comments…" : comments ? "Refresh comments" : `Get top ${TOP_N} comments`}
+                </button>
+              )}
+            </div>
+          </div>
           {!videos.length ? <p className="muted">No videos found. Try a different keyword.</p> : (
             <div className="table-wrap">
               <table className="runs yt-table">
@@ -118,7 +154,8 @@ export default function YouTube() {
                 </thead>
                 <tbody>
                   {videos.map((v) => (
-                    <tr key={v.video_id} className={v.video_id === s?.top_video_id ? "top" : ""}>
+                    <Fragment key={v.video_id}>
+                    <tr className={v.video_id === s?.top_video_id ? "top" : ""}>
                       <td>
                         <div className="yt-video">
                           {v.thumbnail_url && <img src={v.thumbnail_url} alt="" loading="lazy" width={120} height={68} />}
@@ -137,6 +174,12 @@ export default function YouTube() {
                       <td className="num">{fmtNum(v.comments)}</td>
                       <td className="num">{fmtPct(v.engagement_rate)}</td>
                     </tr>
+                    {comments && (
+                      <tr className="yt-comments-row">
+                        <td colSpan={COLUMNS.length + 1}><CommentList data={comments[v.video_id]} /></td>
+                      </tr>
+                    )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -148,14 +191,47 @@ export default function YouTube() {
   );
 }
 
-function downloadCsv(videos: YouTubeVideo[], query: string) {
+function CommentList({ data }: { data?: YouTubeVideoComments }) {
+  if (!data || data.comments_disabled) return <p className="muted small">Comments are turned off for this video.</p>;
+  if (!data.comments.length) return <p className="muted small">No comments yet.</p>;
+  return (
+    <details className="yt-comments">
+      <summary>Top {data.comments.length} comments</summary>
+      <ol>
+        {data.comments.map((c) => (
+          <li key={c.comment_id}>
+            <div className="muted small">
+              <strong>{c.author}</strong> · {fmtDate(c.published_at)} · {fmtNum(c.likes)} likes · {fmtNum(c.replies)} replies
+            </div>
+            <p>{c.text}</p>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+// Quote every cell; a leading = + - @ is prefixed so Excel doesn't run it as a formula
+const csvCell = (x: string | number) => `"${String(x).replace(/^[=+\-@]/, "'$&").replace(/"/g, '""')}"`;
+
+// One cell per comment, e.g. "Great ad! — @ana (1,204 likes)"; line breaks flattened so rows stay one line tall
+const commentCell = (c: YouTubeComment) =>
+  `${c.text.replace(/\s*\n+\s*/g, " ").trim()} — ${c.author} (${fmtNum(c.likes)} likes)`;
+
+function downloadCsv(videos: YouTubeVideo[], comments: CommentsByVideo, query: string) {
   const head = ["video_id", "url", "title", "channel", "published_at", "duration_seconds",
-    "views", "likes", "comments", "engagement_rate"];
-  // Quote every cell; a leading = + - @ is prefixed so Excel doesn't run it as a formula
-  const cell = (x: string | number) => `"${String(x).replace(/^[=+\-@]/, "'$&").replace(/"/g, '""')}"`;
-  const rows = videos.map((v) => [v.video_id, v.url, v.title, v.channel_title, v.published_at,
-    v.duration_seconds, v.views, v.likes, v.comments, v.engagement_rate].map(cell).join(","));
-  const blob = new Blob([[head.join(","), ...rows].join("\n")], { type: "text/csv;charset=utf-8" });
+    "views", "likes", "comments", "engagement_rate",
+    ...Array.from({ length: TOP_N }, (_, i) => `top_comment_${i + 1}`)];
+  const rows = videos.map((v) => {
+    const c = comments[v.video_id];
+    const top = c?.comments_disabled ? ["Comments turned off"] : (c?.comments ?? []).map(commentCell);
+    return [v.video_id, v.url, v.title, v.channel_title, v.published_at, v.duration_seconds,
+      v.views, v.likes, v.comments, v.engagement_rate,
+      ...Array.from({ length: TOP_N }, (_, i) => top[i] ?? "")];
+  });
+  const lines = [head.join(","), ...rows.map((r) => r.map(csvCell).join(","))];
+  // BOM so Excel reads UTF-8 (emoji, Hindi) correctly
+  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `youtube-${query.replace(/[^\w]+/g, "-").slice(0, 40) || "videos"}.csv`;

@@ -84,6 +84,17 @@ export type YouTubeResult = {
   summary: { count: number; total_views: number; avg_views: number; avg_engagement_rate: number; top_video_id: string | null };
 };
 
+export type YouTubeComment = {
+  comment_id: string;
+  author: string;
+  text: string;
+  likes: number;
+  replies: number;
+  published_at: string;
+};
+
+export type YouTubeVideoComments = { video_id: string; comments_disabled: boolean; comments: YouTubeComment[] };
+
 export type NewRun = { category: string; keywords: string[]; language: string };
 
 const ws = (id: number) => `/workspaces/${id}`;
@@ -106,4 +117,6 @@ export const api = {
 
   youtubeSearch: (wsId: number, q: string, limit: number, order: YouTubeOrder, language: string) =>
     request<YouTubeResult>(`${ws(wsId)}/youtube/search?${new URLSearchParams({ q, limit: String(limit), order, language })}`),
+  youtubeComments: (wsId: number, videoIds: string[], limit = 10) =>
+    request<{ videos: YouTubeVideoComments[] }>(`${ws(wsId)}/youtube/comments?${new URLSearchParams({ ids: videoIds.join(","), limit: String(limit) })}`),
 };
