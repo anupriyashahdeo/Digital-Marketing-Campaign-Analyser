@@ -10,7 +10,7 @@ services:
     build: {context: ., dockerfile: infra/docker/api.Dockerfile}
     env_file: .env
     environment: {DATABASE_URL: "postgresql+psycopg://ada:ada@postgres:5432/ada"}   # .env uses localhost for local runs
-    command: uvicorn 
+    command: uvicorn ada.main:app --host 0.0.0.0 --port 8000 --reload
     ports: ["8000:8000"]
     depends_on: {postgres: {condition: service_healthy}}
     # STEP 2+: add  redis: {condition: service_started}  to depends_on above
