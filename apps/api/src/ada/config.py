@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     jev_api_key: str = ""
     jev_base_url: str = ""
+    laya_model: str = "convaiinnovations/laya-typed-decisions"
+    hf_home: str = ""                # where model weights are cached, e.g. D:\hf_cache
     sentry_dsn: str = ""
     jwt_secret: str = "dev-only-change-me"
     session_minutes: int = 60 * 24 * 7

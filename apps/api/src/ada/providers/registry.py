@@ -2,6 +2,7 @@
 from ada.config import settings
 from ada.providers.decision.claude import ClaudeDecision
 from ada.providers.decision.jev import JevDecision
+from ada.providers.decision.laya import LayaDecision
 from ada.providers.decision.rules import RulesDecision
 from ada.providers.mail.console import ConsoleMailer
 from ada.providers.mail.smtp import SmtpMailer
@@ -15,6 +16,8 @@ def get_decision():
         return ClaudeDecision(settings.anthropic_api_key)
     if p == "jev":
         return JevDecision(settings.jev_api_key, settings.jev_base_url)
+    if p == "laya":
+        return LayaDecision()
     return RulesDecision()
 
 

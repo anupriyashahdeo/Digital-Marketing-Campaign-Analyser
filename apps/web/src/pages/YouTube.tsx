@@ -1,6 +1,7 @@
-import { Fragment, useMemo, useState, type FormEvent } from "react";
-import { api, type YouTubeOrder, type YouTubeResult, type YouTubeComment, type YouTubeVideo, type YouTubeVideoComments } from "../api/client";
+import { Fragment, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { api, type YouTubeInsights, type YouTubeOrder, type YouTubeResult, type YouTubeComment, type YouTubeVideo, type YouTubeVideoComments } from "../api/client";
 import Tile from "../components/Tile";
+import LayaInsights from "../features/youtube/LayaInsights";
 import { fmtCompact, fmtDate, fmtDuration, fmtNum, fmtPct } from "../lib/format";
 import { useWorkspace } from "../workspace/WorkspaceContext";
 
@@ -26,12 +27,16 @@ export default function YouTube() {
   const [busy, setBusy] = useState(false);
   const [comments, setComments] = useState<CommentsByVideo | null>(null);
   const [commentsBusy, setCommentsBusy] = useState(false);
+  const [insights, setInsights] = useState<YouTubeInsights | null>(null);
+  const [insightsBusy, setInsightsBusy] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (q.trim().length < 2) return setError("Enter a keyword or paste a YouTube link.");
     setError("");
     setComments(null);
+    setInsights(null);
     setBusy(true);
     try { setResult(await api.youtubeSearch(workspace!.id, q.trim(), limit, order, language)); }
     catch (err) { setError((err as Error).message); }
@@ -53,7 +58,28 @@ export default function YouTube() {
   // One CSV: each video's stats plus its top comments in the same row
   async function download() {
     const byVideo = comments ?? await loadComments();
-    if (byVideo) downloadCsv(videos, byVideo, result!.query);
+    if (byVideo) saveCsv(buildCsv(videos, byVideo), result!.query);
+  }
+
+  async function runLaya(csv: Blob, filename: string) {
+    setError("");
+    setInsightsBusy(true);
+    try { setInsights(await api.youtubeInsights(workspace!.id, csv, filename)); }
+    catch (err) { setError((err as Error).message); }
+    finally { setInsightsBusy(false); }
+  }
+
+  // Same CSV as the download, sent straight to the Laya model
+  async function analyse() {
+    const byVideo = comments ?? await loadComments();
+    if (byVideo) await runLaya(new Blob([buildCsv(videos, byVideo)], { type: "text/csv" }), "youtube.csv");
+  }
+
+  // A CSV downloaded earlier, analysed without searching again (no YouTube quota used)
+  function analyseFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";            // lets the same file be picked again
+    if (file) void runLaya(file, file.name);
   }
 
   const videos = useMemo(() => {
@@ -71,11 +97,22 @@ export default function YouTube() {
           <h1>YouTube explorer</h1>
           <p className="muted">Search by keyword or paste video links to pull public stats.</p>
         </div>
-        {videos.length > 0 && (
-          <button className="secondary" onClick={download} disabled={commentsBusy}>
-            {commentsBusy ? "Preparing CSV…" : "Download CSV"}
+        <div className="head-actions">
+          <input ref={fileInput} type="file" accept=".csv,text/csv" hidden onChange={analyseFile} />
+          <button className="secondary" onClick={() => fileInput.current?.click()} disabled={insightsBusy}>
+            Analyse a saved CSV
           </button>
-        )}
+          {videos.length > 0 && (
+            <>
+              <button className="secondary" onClick={download} disabled={commentsBusy}>
+                {commentsBusy ? "Preparing CSV…" : "Download CSV"}
+              </button>
+              <button className="primary inline" onClick={analyse} disabled={commentsBusy || insightsBusy}>
+                {insightsBusy ? "Laya is reading comments…" : "Analyse with Laya"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       <section className="card">
@@ -122,6 +159,8 @@ export default function YouTube() {
           <Tile label="Avg engagement" value={fmtPct(s.avg_engagement_rate)} note="(Likes + comments) ÷ views" />
         </section>
       )}
+
+      {insights && <LayaInsights data={insights} />}
 
       {result && (
         <section className="card">
@@ -218,7 +257,7 @@ const csvCell = (x: string | number) => `"${String(x).replace(/^[=+\-@]/, "'$&")
 const commentCell = (c: YouTubeComment) =>
   `${c.text.replace(/\s*\n+\s*/g, " ").trim()} — ${c.author} (${fmtNum(c.likes)} likes)`;
 
-function downloadCsv(videos: YouTubeVideo[], comments: CommentsByVideo, query: string) {
+function buildCsv(videos: YouTubeVideo[], comments: CommentsByVideo): string {
   const head = ["video_id", "url", "title", "channel", "published_at", "duration_seconds",
     "views", "likes", "comments", "engagement_rate",
     ...Array.from({ length: TOP_N }, (_, i) => `top_comment_${i + 1}`)];
@@ -231,7 +270,11 @@ function downloadCsv(videos: YouTubeVideo[], comments: CommentsByVideo, query: s
   });
   const lines = [head.join(","), ...rows.map((r) => r.map(csvCell).join(","))];
   // BOM so Excel reads UTF-8 (emoji, Hindi) correctly
-  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  return "﻿" + lines.join("\n");
+}
+
+function saveCsv(csv: string, query: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `youtube-${query.replace(/[^\w]+/g, "-").slice(0, 40) || "videos"}.csv`;

@@ -7,10 +7,11 @@ let onUnauthorized: () => void = () => {};
 export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn; };
 
 async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  const form = body instanceof FormData;   // file uploads: the browser sets the multipart header
   const r = await fetch(`/api/v1${path}`, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: body && !form ? { "Content-Type": "application/json" } : undefined,
+    body: form ? body : body ? JSON.stringify(body) : undefined,
     credentials: "same-origin",
   });
   if (r.status === 204) return undefined as T;
@@ -95,6 +96,44 @@ export type YouTubeComment = {
 
 export type YouTubeVideoComments = { video_id: string; comments_disabled: boolean; comments: YouTubeComment[] };
 
+export type Reception = "loved" | "liked" | "mixed" | "disliked" | "no comments";
+
+// One row per ad from Laya reading its top comments (see apps/api/.../pipeline/youtube_insights.py)
+export type AdInsight = {
+  video_id: string;
+  title: string;
+  channel: string;
+  url: string;
+  views: number;
+  duration_seconds: number;
+  engagement_rate: number;
+  million_views: boolean;
+  comments_read: number;
+  positive_pct: number | null;    // 0-100, weighted by comment likes
+  negative_pct: number | null;
+  reception: Reception;
+  best_comment: string;
+  worst_comment: string;
+  main_complaint: string;         // topic of the negative comments, "" when none
+  age_group_guess: string;        // from what commenters say about themselves, "unknown" if nothing
+  age_hints: number;              // how many comments revealed an age
+};
+
+export type AdBrief = Pick<AdInsight, "video_id" | "title" | "views" | "engagement_rate" | "reception">;
+
+export type YouTubeInsights = {
+  videos: AdInsight[];
+  summary: {
+    videos: number;
+    million_view_ads: number;
+    best_ads: AdBrief[];
+    worst_received: AdBrief[];
+    top_complaints: Record<string, number>;
+    engagement_by_length: Record<string, { ads: number; avg_engagement_rate: number }>;
+    age_groups_from_comments: Record<string, number>;
+  };
+};
+
 export type NewRun = { category: string; keywords: string[]; language: string };
 
 const ws = (id: number) => `/workspaces/${id}`;
@@ -119,4 +158,9 @@ export const api = {
     request<YouTubeResult>(`${ws(wsId)}/youtube/search?${new URLSearchParams({ q, limit: String(limit), order, language })}`),
   youtubeComments: (wsId: number, videoIds: string[], limit = 10) =>
     request<{ videos: YouTubeVideoComments[] }>(`${ws(wsId)}/youtube/comments?${new URLSearchParams({ ids: videoIds.join(","), limit: String(limit) })}`),
+  youtubeInsights: (wsId: number, csv: Blob, filename = "youtube.csv") => {
+    const form = new FormData();
+    form.append("file", csv, filename);
+    return request<YouTubeInsights>(`${ws(wsId)}/youtube/insights`, "POST", form);
+  },
 };

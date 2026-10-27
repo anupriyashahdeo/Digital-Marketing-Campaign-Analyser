@@ -3,7 +3,7 @@ import asyncio
 import re
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from ada.api.schemas import (
@@ -16,6 +16,8 @@ from ada.api.schemas import (
 )
 from ada.db.models import Membership, Workspace
 from ada.db.session import get_db
+from ada.pipeline.youtube_insights import analyse_csv
+from ada.providers.decision.laya import get_agent as get_laya
 from ada.providers.registry import get_youtube
 from ada.providers.youtube.client import YouTubeDataClient, YouTubeError
 from ada.security.deps import workspace_member
@@ -26,6 +28,12 @@ router = APIRouter(prefix="/workspaces/{workspace_id}/youtube", tags=["youtube"]
 _LINK_ID = re.compile(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})")
 _BARE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 _NOT_SET_UP = "YouTube isn't set up yet. Add YOUTUBE_API_KEY to .env and restart the API."
+MAX_CSV_BYTES = 2_000_000
+
+
+def laya_loader():
+    """The model loader as a dependency, so tests can swap in a fake model."""
+    return get_laya
 
 
 def video_ids_in(text: str) -> list[str]:
@@ -106,3 +114,23 @@ async def comments(ids: str = Query(min_length=11, max_length=2000,
                              comments=[YouTubeCommentOut(**c.model_dump()) for c in found or []])
         for v, found in zip(video_ids, results, strict=True)
     ])
+
+
+@router.post("/insights")
+async def insights(file: UploadFile, m: Membership = Depends(workspace_member),
+                   laya=Depends(laya_loader)) -> dict:
+    """Upload the 'Download CSV' export; Laya reads every top comment and rolls it up per ad.
+    Shape: {"videos": [one row per ad], "summary": {...}} (see ada.pipeline.youtube_insights)."""
+    content = await file.read(MAX_CSV_BYTES + 1)
+    if len(content) > MAX_CSV_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "CSV is over 2 MB.")
+    try:
+        agent = await asyncio.to_thread(laya)      # first call loads the model (a few seconds)
+    except ImportError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "Laya isn't installed on this server. Run: pip install -e .[laya]") from e
+    try:
+        return await asyncio.to_thread(analyse_csv, content.decode("utf-8-sig"), agent)
+    except (ValueError, UnicodeDecodeError) as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"Couldn't read that CSV: {e}") from e

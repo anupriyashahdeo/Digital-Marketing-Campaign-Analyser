@@ -8,3 +8,7 @@ dist/
 *.db
 *.egg-info/
 .ruff_cache/
+.env.*
+!.env.example
+*.pem
+*.key
