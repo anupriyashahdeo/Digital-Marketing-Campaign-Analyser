@@ -4,6 +4,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BaseModel, Field, PlainSerializer, field_validator
 
 from ada.config import settings
+from ada.spi.comparer import Comparison
 
 # Regions with a working ad-source adapter. Add a country here only when its adapter exists.
 SUPPORTED_REGIONS = {settings.region}
@@ -113,11 +114,27 @@ class DashboardStats(BaseModel):
     run_spend_cap_usd: float
 
 
+class InterestedVideo(BaseModel):
+    title: str
+    url: str
+    interested_people: int
+    interested_comments: int
+    comments_read: int
+
+
+class ViewerInterest(BaseModel):
+    analysed_at: UtcDatetime
+    video_count: int
+    interested_people: int          # across all videos in the analysis
+    top_videos: list[InterestedVideo]
+
+
 class DashboardOut(BaseModel):
     workspace: WorkspaceOut
     stats: DashboardStats
     recent_runs: list[RunOut]
     can_edit: bool
+    viewer_interest: ViewerInterest | None  # None until a Laya analysis has read some comments
 
 
 class YouTubeVideoOut(BaseModel):
@@ -160,6 +177,22 @@ class YouTubeVideoComments(BaseModel):
 
 class YouTubeCommentsOut(BaseModel):
     videos: list[YouTubeVideoComments]
+
+
+class ComparedAd(BaseModel):
+    video: YouTubeVideoOut
+    views_per_day: float
+    score: int                      # 0-100, rank within the compared set
+    comments_disabled: bool
+    top_comments: list[YouTubeCommentOut]
+
+
+class YouTubeCompareOut(BaseModel):
+    best: ComparedAd
+    worst: ComparedAd
+    ads_judged: int
+    ads_too_new: int                # left out: under 3 days old or under 100 views
+    analysis: Comparison
 
 
 class YouTubeSearchOut(BaseModel):

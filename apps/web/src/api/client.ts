@@ -47,6 +47,13 @@ export type Run = {
 
 export type RunPage = { items: Run[]; total: number; limit: number; offset: number };
 
+export type ViewerInterest = {
+  analysed_at: string;
+  video_count: number;
+  interested_people: number;      // across all videos in the analysis
+  top_videos: { title: string; url: string; interested_people: number; interested_comments: number; comments_read: number }[];
+};
+
 export type Dashboard = {
   workspace: Workspace;
   stats: {
@@ -59,6 +66,7 @@ export type Dashboard = {
   };
   recent_runs: Run[];
   can_edit: boolean;
+  viewer_interest: ViewerInterest | null;   // null until a Laya analysis has read some comments
 };
 
 export type YouTubeVideo = {
@@ -117,6 +125,8 @@ export type AdInsight = {
   main_complaint: string;         // topic of the negative comments, "" when none
   age_group_guess: string;        // from what commenters say about themselves, "unknown" if nothing
   age_hints: number;              // how many comments revealed an age
+  interested_comments: number;    // top comments showing interest in the product
+  interested_people: number | null; // those commenters + the likes on their comments, null with no comments
 };
 
 export type AdBrief = Pick<AdInsight, "video_id" | "title" | "views" | "engagement_rate" | "reception">;
@@ -134,7 +144,46 @@ export type YouTubeInsights = {
   };
 };
 
-export type NewRun = { category: string; keywords: string[]; language: string };
+// Best vs worst ad from one search (see apps/api/.../pipeline/ad_compare.py)
+export type ComparedAd = {
+  video: YouTubeVideo;
+  views_per_day: number;
+  score: number;                  // 0-100, rank within the compared set
+  comments_disabled: boolean;
+  top_comments: YouTubeComment[];
+};
+
+export type AdComparison = {
+  best: ComparedAd;
+  worst: ComparedAd;
+  ads_judged: number;
+  ads_too_new: number;            // left out: under 3 days old or under 100 views
+  analysis: {
+    headline: string;
+    best_strengths: string[];
+    worst_weaknesses: string[];
+    differences: { aspect: string; best: string; worst: string; why_it_matters: string }[];
+    recommendations: string[];
+    caveat: string;
+    analysed_by: "laya" | "rules";  // laya: also read the top comments (free, local model)
+    notice: string;                 // why Laya wasn't used, when it was expected
+  };
+};
+
+// A CSV queued for the model machine (see apps/api/.../api/v1/tasks.py)
+export type TaskStatus = "queued" | "processing" | "done" | "failed";
+
+export type AnalysisTask = {
+  task_id: string;
+  status: TaskStatus;
+  task_complete: 0 | 1;
+  created_at: string;
+  completed_at: string | null;
+  error: string | null;
+  output: YouTubeInsights | null;   // set once status is "done"
+};
+
+export type NewRun ={ category: string; keywords: string[]; language: string };
 
 const ws = (id: number) => `/workspaces/${id}`;
 
@@ -158,9 +207,14 @@ export const api = {
     request<YouTubeResult>(`${ws(wsId)}/youtube/search?${new URLSearchParams({ q, limit: String(limit), order, language })}`),
   youtubeComments: (wsId: number, videoIds: string[], limit = 10) =>
     request<{ videos: YouTubeVideoComments[] }>(`${ws(wsId)}/youtube/comments?${new URLSearchParams({ ids: videoIds.join(","), limit: String(limit) })}`),
-  youtubeInsights: (wsId: number, csv: Blob, filename = "youtube.csv") => {
+  youtubeCompare: (wsId: number, videoIds: string[], q: string) =>
+    request<AdComparison>(`${ws(wsId)}/youtube/compare?${new URLSearchParams({ ids: videoIds.join(","), q })}`),
+  // Queue the CSV for the model; poll analysisTask until task_complete is 1
+  taskInput: (wsId: number, csv: Blob, filename = "youtube.csv") => {
     const form = new FormData();
     form.append("file", csv, filename);
-    return request<YouTubeInsights>(`${ws(wsId)}/youtube/insights`, "POST", form);
+    return request<{ task_id: string; status: TaskStatus; poll_after_seconds: number }>(`${ws(wsId)}/taskinput`, "POST", form);
   },
+  analysisTask: (wsId: number, taskId: string) =>
+    request<AnalysisTask>(`${ws(wsId)}/taskinput/${encodeURIComponent(taskId)}`),
 };

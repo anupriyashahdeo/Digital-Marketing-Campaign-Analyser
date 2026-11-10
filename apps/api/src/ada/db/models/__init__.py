@@ -1,6 +1,18 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # STEP 3+: add these back to the imports when you uncomment the tables below
@@ -68,6 +80,47 @@ class Run(Base):
     error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class YouTubeInsight(Base):
+    """A workspace's latest Laya analysis, kept for the dashboard. Older ones are replaced."""
+    __tablename__ = "youtube_insights"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"),
+                                              index=True)
+    videos: Mapped[list] = mapped_column(JSON, default=list)
+    analysed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+def utcnow() -> datetime:
+    """Naive UTC, set in Python (not the DB clock) so lease and expiry maths never mix zones."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+class AnalysisTask(Base):
+    """One CSV waiting for (or done by) the model machine, which polls GET /taskoutput.
+
+    task_complete: 0 = waiting or being processed, 1 = finished (task_output set, or error set).
+    A claim gives the worker a lease_token; only that token can post the result, and an
+    expired lease (crashed worker) puts the task back in the queue, up to max attempts.
+    The CSV is cleared once the task finishes, so uploaded comments aren't kept around."""
+    __tablename__ = "tasks"
+    __table_args__ = (Index("ix_tasks_queue", "task_complete", "created_at"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)        # uuid4, unguessable
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"),
+                                              index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(30), default="youtube_insights")
+    task_input: Mapped[str | None] = mapped_column(Text, nullable=True)  # the CSV
+    task_complete: Mapped[int] = mapped_column(Integer, default=0)
+    task_output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    save_to_dashboard: Mapped[bool] = mapped_column(Boolean, default=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 # ---------------------------------------------------------------------------

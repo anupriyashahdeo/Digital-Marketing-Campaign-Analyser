@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from ada.api.v1 import auth, runs, workspaces, youtube
+from ada.api.v1 import auth, runs, tasks, workspaces, youtube
 from ada.config import settings
 from ada.db.models import Base
 from ada.db.session import engine
@@ -32,6 +32,8 @@ def create_app() -> FastAPI:
     if settings.app_env == "prod" and (settings.jwt_secret == "dev-only-change-me"
                                        or len(settings.jwt_secret) < 32):
         raise RuntimeError("Set JWT_SECRET (32+ random chars) before running in production")
+    if settings.task_worker_key and len(settings.task_worker_key) < 32:
+        raise RuntimeError("TASK_WORKER_KEY must be 32+ random chars (or blank to turn the queue off)")
     if settings.app_env == "dev":
         Base.metadata.create_all(engine)   # production uses Alembic migrations instead
     app = FastAPI(title="Ad Campaign Analyser", version="0.1.0",
@@ -57,11 +59,14 @@ def create_app() -> FastAPI:
 
     # Every router except /health and /auth checks sign-in inside its own dependencies
     # (current_user / workspace_member), so access rules sit next to the routes they guard.
-    for r in (auth.router, workspaces.router, runs.router, youtube.router):
+    # The task worker routes check the TASK_WORKER_KEY bearer token instead (tasks.worker_auth).
+    for r in (auth.router, workspaces.router, runs.router, youtube.router,
+              tasks.user_router, tasks.worker_router):
         app.include_router(r, prefix="/api/v1")
     if settings.web_dist:
         _serve_website(app, Path(settings.web_dist).resolve())
     return app
+
 
 
 def _serve_website(app: FastAPI, dist: Path) -> None:

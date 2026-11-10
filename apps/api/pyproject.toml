@@ -14,7 +14,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "ruff", "mypy"]
 media = ["playwright"]
-laya = ["laya>=0.4"]              # local decision model (pulls in torch, ~1 GB)
+worker = ["laya>=0.4"]            # GPU machine only (task_poller); never on the web server
 
 [tool.setuptools.packages.find]
 where = ["src"]

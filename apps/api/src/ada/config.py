@@ -10,15 +10,21 @@ class Settings(BaseSettings):
     language: str = "en"
     database_url: str = "sqlite:///./dev.db"
     redis_url: str = "redis://localhost:6379/0"
-    decision_provider: str = "rules"
+    decision_provider: str = "rules"   # rules | claude | jev
     escalation_threshold: float = 0.6
     run_spend_cap_usd: float = 5.0
     youtube_api_key: str = ""
     anthropic_api_key: str = ""
     jev_api_key: str = ""
     jev_base_url: str = ""
-    laya_model: str = "convaiinnovations/laya-typed-decisions"
-    hf_home: str = ""                # where model weights are cached, e.g. D:\hf_cache
+    # Task queue: the model machine polls /api/v1/taskoutput with this bearer key.
+    # Blank = the worker endpoints answer 503 (queue off). Use 32+ random characters.
+    task_worker_key: str = ""
+    task_lease_seconds: int = 900       # a claimed task goes back to the queue after this
+    task_max_attempts: int = 3          # claims before a task is marked failed
+    task_expire_minutes: int = 30       # still unfinished after this = failed (worker offline?)
+    task_max_pending_per_user: int = 3  # unfinished tasks one user can have at a time
+    task_keep_days: int = 7             # finished tasks are deleted after this
     sentry_dsn: str = ""
     jwt_secret: str = "dev-only-change-me"
     session_minutes: int = 60 * 24 * 7

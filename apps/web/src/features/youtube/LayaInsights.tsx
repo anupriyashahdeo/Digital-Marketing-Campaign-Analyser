@@ -45,14 +45,17 @@ export default function LayaInsights({ data }: { data: YouTubeInsights }) {
         <div className="card-head"><h2>What viewers say</h2></div>
         <p className="muted small">
           The Laya model read each ad's top comments. Good / bad shares count a comment once per like,
-          so a comment with 1,000 likes outweighs one with 3.
+          so a comment with 1,000 likes outweighs one with 3. Interested counts people who showed interest
+          in the product: each commenter wanting to buy or try it, plus the likes on those comments. It only
+          covers the top comments, so it shows visible interest, not how many viewers overall are interested.
         </p>
         <div className="table-wrap">
           <table className="runs laya-table">
             <thead>
               <tr>
                 <th>Ad</th><th className="num">Views</th><th>Reception</th>
-                <th className="num">Good</th><th className="num">Bad</th><th>Main complaint</th><th>Age hint</th>
+                <th className="num">Good</th><th className="num">Bad</th><th className="num">Interested</th>
+                <th>Main complaint</th><th>Age hint</th>
               </tr>
             </thead>
             <tbody>
@@ -70,11 +73,19 @@ export default function LayaInsights({ data }: { data: YouTubeInsights }) {
                     <td><ReceptionBadge r={a.reception} /></td>
                     <td className="num">{a.positive_pct === null ? "—" : `${a.positive_pct}%`}</td>
                     <td className="num">{a.negative_pct === null ? "—" : `${a.negative_pct}%`}</td>
+                    <td className="num">
+                      {a.interested_people === null ? "—" : (
+                        <>
+                          {fmtNum(a.interested_people)}
+                          <div className="muted small nowrap">{a.interested_comments} of {a.comments_read} comments</div>
+                        </>
+                      )}
+                    </td>
                     <td>{a.main_complaint ? TOPIC[a.main_complaint] ?? a.main_complaint : "—"}</td>
                     <td>{AGE[a.age_group_guess] ? `${AGE[a.age_group_guess]} (${a.age_hints})` : "—"}</td>
                   </tr>
                   {(a.best_comment || a.worst_comment) && (
-                    <tr className="yt-comments-row"><td colSpan={7}><Quotes ad={a} /></td></tr>
+                    <tr className="yt-comments-row"><td colSpan={8}><Quotes ad={a} /></td></tr>
                   )}
                 </Fragment>
               ))}

@@ -16,3 +16,5 @@ services:
         sync: false
       - key: FRONTEND_URL          # your Render URL, e.g. https://ad-campaign-analyser.onrender.com
         sync: false
+      - key: TASK_WORKER_KEY       # 32+ random chars; the GPU worker machine uses the same value
+        sync: false

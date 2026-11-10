@@ -4,9 +4,16 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ada.api.schemas import DashboardOut, DashboardStats, RunOut, WorkspaceOut
+from ada.api.schemas import (
+    DashboardOut,
+    DashboardStats,
+    InterestedVideo,
+    RunOut,
+    ViewerInterest,
+    WorkspaceOut,
+)
 from ada.config import settings
-from ada.db.models import Membership, Run, User, Workspace
+from ada.db.models import Membership, Run, User, Workspace, YouTubeInsight
 from ada.db.session import get_db
 from ada.domain.workspaces import ensure_personal_workspace
 from ada.security.deps import current_user, workspace_member
@@ -25,6 +32,21 @@ def list_workspaces(user: User = Depends(current_user), db: Session = Depends(ge
                       .where(Membership.user_id == user.id)
                       .order_by(Workspace.id)).all()
     return [WorkspaceOut(id=w.id, name=w.name, region=w.region, role=role) for w, role in rows]
+
+
+def _viewer_interest(db: Session, workspace_id: int) -> ViewerInterest | None:
+    latest = db.scalars(select(YouTubeInsight).where(YouTubeInsight.workspace_id == workspace_id)
+                        .order_by(YouTubeInsight.analysed_at.desc(), YouTubeInsight.id.desc())
+                        .limit(1)).first()
+    if not latest or not latest.videos:
+        return None
+    ranked = sorted(latest.videos, key=lambda v: v["interested_people"], reverse=True)
+    return ViewerInterest(
+        analysed_at=latest.analysed_at,
+        video_count=len(ranked),
+        interested_people=sum(v["interested_people"] for v in ranked),
+        top_videos=[InterestedVideo(**v) for v in ranked[:5]],
+    )
 
 
 @router.get("/{workspace_id}/dashboard", response_model=DashboardOut)
@@ -55,4 +77,5 @@ def dashboard(m: Membership = Depends(workspace_member), db: Session = Depends(g
         stats=stats,
         recent_runs=[RunOut.model_validate(r) for r in recent],
         can_edit=m.role in EDIT_ROLES,
+        viewer_interest=_viewer_interest(db, ws.id),
     )

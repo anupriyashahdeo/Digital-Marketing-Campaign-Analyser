@@ -1,8 +1,4 @@
-from ada.api.v1.youtube import laya_loader
-from ada.main import app
 from ada.pipeline.youtube_insights import analyse_csv, parse_comment
-from tests.unit.test_auth import signup
-from tests.unit.test_workspaces import ws_id
 
 HEAD = ("video_id,url,title,channel,published_at,duration_seconds,views,likes,comments,"
         "engagement_rate,top_comment_1,top_comment_2,top_comment_3\n")
@@ -21,7 +17,8 @@ def answer(choice, conf=0.9):
 
 
 class FakeLaya:
-    """Keyword stand-in for the model: 'love' is positive, 'kids' reveals 25-44."""
+    """Keyword stand-in for the model: 'love' is positive and interested, 'kids' reveals 25-44,
+    'worst' is an unsure yes on interest."""
 
     def __init__(self):
         self.calls = []
@@ -32,6 +29,9 @@ class FakeLaya:
             "sentiment": answer("positive" if "love" in s.lower() else "negative"),
             "topic": answer("ad_creative" if "love" in s.lower() else "annoyance"),
             "age_group": answer("25_44") if "kids" in s else answer("18_24", conf=0.3),
+            "product_interest": (answer("interested") if "love" in s.lower()
+                                 else answer("interested", conf=0.55) if "worst" in s.lower()
+                                 else answer("not_interested")),
         }} for s in states]
 
 
@@ -54,21 +54,11 @@ def test_analyse_csv_rolls_up_per_video():
     assert flop["reception"] == "disliked" and flop["main_complaint"] == "annoyance"
     assert flop["age_group_guess"] == "unknown"                  # low-confidence guess dropped
     assert quiet["reception"] == "no comments" and quiet["comments_read"] == 0
+    assert hit["interested_comments"] == 1 and hit["interested_people"] == 1205  # 1 + 1,204 likes
+    assert flop["interested_comments"] == 0 and flop["interested_people"] == 0   # unsure yes dropped
+    assert quiet["interested_people"] is None
     s = report["summary"]
     assert s["million_view_ads"] == 2
     assert [b["video_id"] for b in s["best_ads"]] == ["aaaaaaaaaa1"]
     assert [w["video_id"] for w in s["worst_received"]] == ["bbbbbbbbbb2"]
     assert s["engagement_by_length"]["60s+"]["ads"] == 1
-
-
-def test_insights_endpoint(client):
-    c, _ = client
-    signup(c)
-    app.dependency_overrides[laya_loader] = lambda: FakeLaya
-    r = c.post(f"/api/v1/workspaces/{ws_id(c)}/youtube/insights",
-               files={"file": ("yt.csv", CSV.encode(), "text/csv")})
-    assert r.status_code == 200, r.text
-    assert r.json()["summary"]["videos"] == 3
-    r = c.post(f"/api/v1/workspaces/{ws_id(c)}/youtube/insights",
-               files={"file": ("x.csv", b"a,b\n1,2\n", "text/csv")})
-    assert r.status_code == 422

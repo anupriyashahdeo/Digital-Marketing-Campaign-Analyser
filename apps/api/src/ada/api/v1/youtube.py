@@ -3,24 +3,27 @@ import asyncio
 import re
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from ada.api.schemas import (
+    ComparedAd,
     YouTubeCommentOut,
     YouTubeCommentsOut,
+    YouTubeCompareOut,
     YouTubeSearchOut,
     YouTubeSummary,
     YouTubeVideoComments,
     YouTubeVideoOut,
 )
-from ada.db.models import Membership, Workspace
+from ada.db.models import Membership, Workspace, YouTubeInsight
 from ada.db.session import get_db
-from ada.pipeline.youtube_insights import analyse_csv
-from ada.providers.decision.laya import get_agent as get_laya
-from ada.providers.registry import get_youtube
+from ada.pipeline.ad_compare import rank
+from ada.providers.registry import get_comparer, get_youtube
 from ada.providers.youtube.client import YouTubeDataClient, YouTubeError
 from ada.security.deps import workspace_member
+from ada.spi.comparer import AdEvidence
 from ada.spi.video_metadata import VideoMeta
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/youtube", tags=["youtube"])
@@ -28,12 +31,8 @@ router = APIRouter(prefix="/workspaces/{workspace_id}/youtube", tags=["youtube"]
 _LINK_ID = re.compile(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})")
 _BARE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 _NOT_SET_UP = "YouTube isn't set up yet. Add YOUTUBE_API_KEY to .env and restart the API."
-MAX_CSV_BYTES = 2_000_000
+MAX_CSV_BYTES = 2_000_000          # CSV uploads to the task queue (see tasks.py)
 
-
-def laya_loader():
-    """The model loader as a dependency, so tests can swap in a fake model."""
-    return get_laya
 
 
 def video_ids_in(text: str) -> list[str]:
@@ -50,6 +49,15 @@ def video_ids_in(text: str) -> list[str]:
         if vid not in ids:
             ids.append(vid)
     return ids
+
+
+def _listed_ids(ids: str, least: int) -> list[str]:
+    """'a,b,c' -> valid ids, no repeats; 422 unless there are `least` to 50 of them."""
+    video_ids = list(dict.fromkeys(i for i in ids.split(",") if _BARE_ID.fullmatch(i)))
+    if not least <= len(video_ids) <= 50:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"Send {least} to 50 video ids.")
+    return video_ids
 
 
 def _out(v: VideoMeta) -> YouTubeVideoOut:
@@ -102,9 +110,7 @@ async def comments(ids: str = Query(min_length=11, max_length=2000,
     """Top comments (YouTube's 'Top comments' order) for each listed video. 1 quota unit each."""
     if yt is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, _NOT_SET_UP)
-    video_ids = list(dict.fromkeys(i for i in ids.split(",") if _BARE_ID.fullmatch(i)))
-    if not video_ids or len(video_ids) > 50:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Send 1 to 50 video ids.")
+    video_ids = _listed_ids(ids, least=1)
     try:
         results = await asyncio.gather(*(yt.top_comments(v, limit) for v in video_ids))
     except YouTubeError as e:
@@ -116,21 +122,49 @@ async def comments(ids: str = Query(min_length=11, max_length=2000,
     ])
 
 
-@router.post("/insights")
-async def insights(file: UploadFile, m: Membership = Depends(workspace_member),
-                   laya=Depends(laya_loader)) -> dict:
-    """Upload the 'Download CSV' export; Laya reads every top comment and rolls it up per ad.
-    Shape: {"videos": [one row per ad], "summary": {...}} (see ada.pipeline.youtube_insights)."""
-    content = await file.read(MAX_CSV_BYTES + 1)
-    if len(content) > MAX_CSV_BYTES:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "CSV is over 2 MB.")
+def _compared(a: AdEvidence) -> ComparedAd:
+    return ComparedAd(video=_out(a.video), views_per_day=a.views_per_day, score=a.score,
+                      comments_disabled=a.comments is None,
+                      top_comments=[YouTubeCommentOut(**c.model_dump()) for c in a.comments or []])
+
+
+@router.get("/compare", response_model=YouTubeCompareOut)
+async def compare(ids: str = Query(min_length=23, max_length=2000,
+                                   description="Comma-separated video ids from one search (2-50)"),
+                  q: str = Query("", max_length=500, description="The search, for context"),
+                  m: Membership = Depends(workspace_member),
+                  yt: YouTubeDataClient | None = Depends(get_youtube),
+                  comparer=Depends(get_comparer)):
+    """Rank the listed ads, then show why the best beat the worst. Free: 3 YouTube quota units
+    (stats + both ads' comments), no paid API."""
+    if yt is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, _NOT_SET_UP)
+    video_ids = _listed_ids(ids, least=2)
     try:
-        agent = await asyncio.to_thread(laya)      # first call loads the model (a few seconds)
-    except ImportError as e:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "Laya isn't installed on this server. Run: pip install -e .[laya]") from e
-    try:
-        return await asyncio.to_thread(analyse_csv, content.decode("utf-8-sig"), agent)
-    except (ValueError, UnicodeDecodeError) as e:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            f"Couldn't read that CSV: {e}") from e
+        metas = await yt.get_videos(video_ids)    # fresh stats + descriptions for the prompt
+        if len(metas) < 2:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "Need at least 2 videos that still exist on YouTube.")
+        ranked, too_new = rank(metas)
+        best, worst = ranked[0], ranked[-1]
+        best.comments, worst.comments = await asyncio.gather(
+            yt.top_comments(best.video.video_id), yt.top_comments(worst.video.video_id))
+    except YouTubeError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+    analysis = await comparer.compare(best, worst, " ".join(q.split()))
+    return YouTubeCompareOut(best=_compared(best), worst=_compared(worst), ads_judged=len(ranked),
+                             ads_too_new=too_new, analysis=analysis)
+
+
+def save_interest(db: Session, workspace_id: int, rows: list[dict]) -> None:
+    """Keep this analysis for the dashboard, replacing the last one. Rows come from an uploaded
+    CSV that other members will see, so bad ids are dropped and the link is built here."""
+    videos = [{"title": r["title"][:200], "url": f"https://www.youtube.com/watch?v={r['video_id']}",
+               "interested_people": r["interested_people"],
+               "interested_comments": r["interested_comments"],
+               "comments_read": r["comments_read"]}
+              for r in rows
+              if r["interested_people"] is not None and _BARE_ID.fullmatch(r["video_id"])]
+    db.execute(delete(YouTubeInsight).where(YouTubeInsight.workspace_id == workspace_id))
+    db.add(YouTubeInsight(workspace_id=workspace_id, videos=videos))
+    db.commit()

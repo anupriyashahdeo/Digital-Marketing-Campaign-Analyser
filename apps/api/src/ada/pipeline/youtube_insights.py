@@ -1,12 +1,16 @@
 """Turn the YouTube page's 'Download CSV' export into ad insights with the Laya model.
 
 Per video: did it reach a million views, engagement, how its top comments read (good / bad /
-neutral and what they're about), the best and worst comment, and an age-group guess.
+neutral and what they're about), the best and worst comment, an age-group guess, and how many
+people signalled interest in the product.
 Across videos: the best ads, the worst received, top complaints, engagement by ad length.
 
 Limits: the CSV only holds public data. Real viewer ages and watch time are in YouTube
 Analytics, which only the channel owner can read. The age group here is what commenters say
 about themselves ("my kids", "in college"), so it is a hint from a few comments, not demographics.
+Interested people = commenters showing interest + the likes on those comments, from the top
+comments only. It is a rough signal of visible interest, not a count of interested viewers:
+silent viewers are missed, and one person may like several comments.
 
 Run:  python -m ada.pipeline.youtube_insights youtube-nike.csv -o nike-insights.csv
 """
@@ -20,6 +24,7 @@ from typing import Any, Protocol
 
 MILLION = 1_000_000
 AGE_MIN_CONFIDENCE = 0.35      # 5 options spread the odds; below this Laya is guessing -> "unknown"
+INTEREST_MIN_CONFIDENCE = 0.6  # 2 options start at 0.5; a weak yes shouldn't count all its likes
 LENGTH_BUCKETS = [(15, "0-15s"), (30, "16-30s"), (60, "31-60s"), (10**9, "60s+")]
 _COMMENT = re.compile(r"^(?P<text>.*) — (?P<author>.*?) \((?P<likes>[\d,]+) likes\)$", re.DOTALL)
 
@@ -54,6 +59,17 @@ COMMENT_QUESTIONS: dict[str, dict] = {
             "25_44": "my kids, my wife or husband, office, career",
             "45_plus": "grandchildren, retirement, back in the 80s",
             "unknown": "nothing in the comment says how old they are",
+        },
+    },
+    "product_interest": {
+        "type": "choice",
+        "instructions": "Does this YouTube commenter show interest in buying or trying the "
+                        "product in the video?",
+        "criteria": {
+            "interested": "wants to buy or try it, asks the price or where to get it, "
+                          "or already owns it and recommends it",
+            "not_interested": "no sign of wanting it: only about the ad, a joke, "
+                              "a complaint, or off-topic",
         },
     },
 }
@@ -114,9 +130,11 @@ def video_row(v: dict) -> dict:
     if not cs:
         return row | {"positive_pct": None, "negative_pct": None, "reception": "no comments",
                       "best_comment": "", "worst_comment": "", "main_complaint": "",
-                      "age_group_guess": "unknown", "age_hints": 0}
+                      "age_group_guess": "unknown", "age_hints": 0,
+                      "interested_comments": 0, "interested_people": None}
     pos = [c for c in cs if c["sentiment"] == "positive"]
     neg = [c for c in cs if c["sentiment"] == "negative"]
+    interested = [c for c in cs if c["interested"]]
     ages = Counter(c["age_group"] for c in cs if c["age_group"] != "unknown")
     complaints = Counter(c["topic"] for c in neg)
     row["positive_pct"], row["negative_pct"] = _pct(cs, "positive"), _pct(cs, "negative")
@@ -126,6 +144,8 @@ def video_row(v: dict) -> dict:
     row["main_complaint"] = complaints.most_common(1)[0][0] if complaints else ""
     row["age_group_guess"] = ages.most_common(1)[0][0] if ages else "unknown"
     row["age_hints"] = sum(ages.values())       # how many comments revealed an age
+    row["interested_comments"] = len(interested)
+    row["interested_people"] = sum(1 + c["likes"] for c in interested)  # commenter + their likes
     return row
 
 
@@ -159,30 +179,35 @@ def summarise(rows: list[dict]) -> dict:
 
 
 def analyse_csv(content: str, agent: Predictor, batch_size: int = 32) -> dict:
-    """All comments of all videos go through Laya in shared batches, then roll up per video."""
+    """All comments of all videos go through Laya in shared batches, then roll up per video.
+    Each comment costs ~0.5-1.5s on CPU, so repeated texts (spam, "first!") are asked once."""
     videos = read_csv(content)
     comments = [c for v in videos for c in v["comments"]]
-    results = agent.predict_batch([c["text"] for c in comments], COMMENT_QUESTIONS,
-                                  batch_size=batch_size) if comments else []
-    for c, r in zip(comments, results, strict=True):
-        a = r["answers"]
+    texts = list(dict.fromkeys(c["text"] for c in comments))
+    results = agent.predict_batch(texts, COMMENT_QUESTIONS, batch_size=batch_size) if texts else []
+    by_text = dict(zip(texts, results, strict=True))
+    for c in comments:
+        a = by_text[c["text"]]["answers"]
         c["sentiment"], c["topic"] = a["sentiment"]["choice"], a["topic"]["choice"]
         age = a["age_group"]
         sure = age["answer_confidence"] >= AGE_MIN_CONFIDENCE
         c["age_group"] = age["choice"] if sure else "unknown"
+        interest = a["product_interest"]
+        c["interested"] = (interest["choice"] == "interested"
+                           and interest["answer_confidence"] >= INTEREST_MIN_CONFIDENCE)
     rows = [video_row(v) for v in videos]
     return {"videos": rows, "summary": summarise(rows)}
 
 
 def main() -> None:
-    from ada.providers.decision.laya import get_agent
+    from ada.workers.task_poller import load_model  # needs laya: run this on the GPU machine
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("csv", help="file from the YouTube page's Download CSV button")
     ap.add_argument("-o", "--out", help="write one row per video here (CSV)")
     args = ap.parse_args()
     with open(args.csv, encoding="utf-8-sig") as f:
-        report = analyse_csv(f.read(), get_agent())
+        report = analyse_csv(f.read(), load_model())
     if args.out and report["videos"]:
         with open(args.out, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=list(report["videos"][0]))

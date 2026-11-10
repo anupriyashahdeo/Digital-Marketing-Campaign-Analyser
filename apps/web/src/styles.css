@@ -139,6 +139,16 @@ table.runs tr:last-child td { border-bottom:0; }
 .laya-quotes p { margin:0; font-size:13px; overflow-wrap:anywhere; }
 .laya-extra { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px; }
 .laya-extra .card { margin:0; }
+/* Best vs worst ad */
+.compare-headline { font-size:17px; font-weight:600; margin:4px 0 16px; }
+.compare-pair { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+.compare-ad { border:1px solid var(--border); border-radius:10px; padding:14px; display:grid; gap:8px; align-content:start; }
+.compare-best { border-top:3px solid var(--good); } .compare-worst { border-top:3px solid var(--critical); }
+.compare-ad img { width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:6px; background:var(--border); }
+.compare-title { font-weight:600; }
+.compare-points, .compare-tips { margin:0; padding-left:20px; display:grid; gap:4px; font-size:14px; }
+.compare-quote { margin:0; overflow-wrap:anywhere; }
+.compare h3 { font-size:15px; margin:16px 0 8px; }
 .top-tag { margin-left:8px; padding:1px 6px; border-radius:6px; font-size:11px; font-weight:600;
   background:var(--ok-bg); color:var(--ok); }
 
@@ -151,6 +161,18 @@ table.runs tr:last-child td { border-bottom:0; }
   .topbar { padding:10px 16px; }
   .topbar-right .user-email { display:none; }
   .tiles { gap:10px; } .tile-value { font-size:22px; }
-  .field-row, .yt-form .yt-options, .laya-extra { grid-template-columns:1fr; }
+  .field-row, .yt-form .yt-options, .laya-extra, .compare-pair { grid-template-columns:1fr; }
   .yt-video img { display:none; }
 }
+
+/* Laya task queue: shown while the model machine works on a CSV */
+.laya-loading { display:flex; gap:16px; align-items:flex-start; }
+.laya-loading h2 { margin:0 0 8px; }
+.spinner { flex:none; width:28px; height:28px; border:3px solid var(--border); border-top-color:var(--brand);
+  border-radius:50%; animation:spin .9s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration:3s; } }
+.laya-steps { list-style:none; padding:0; margin:0 0 8px; font-size:14px; }
+.laya-steps li { color:var(--muted); padding:2px 0; }
+.laya-steps li.current { color:var(--text); font-weight:600; }
+.laya-steps li.done { color:var(--ok); }

@@ -1,13 +1,16 @@
 import { Fragment, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { api, type YouTubeInsights, type YouTubeOrder, type YouTubeResult, type YouTubeComment, type YouTubeVideo, type YouTubeVideoComments } from "../api/client";
+import { api, type AdComparison, type YouTubeOrder, type YouTubeResult, type YouTubeComment, type YouTubeVideo, type YouTubeVideoComments } from "../api/client";
 import Tile from "../components/Tile";
+import BestVsWorst from "../features/youtube/BestVsWorst";
 import LayaInsights from "../features/youtube/LayaInsights";
+import LayaLoading from "../features/youtube/LayaLoading";
+import { useAnalysisTask } from "../features/youtube/useAnalysisTask";
 import { fmtCompact, fmtDate, fmtDuration, fmtNum, fmtPct } from "../lib/format";
 import { useWorkspace } from "../workspace/WorkspaceContext";
 
 type SortKey = "views" | "likes" | "comments" | "engagement_rate" | "published_at";
 
-const TOP_N = 10;
+const TOP_N = 20;
 type CommentsByVideo = Record<string, YouTubeVideoComments>;
 
 const COLUMNS: [SortKey, string][] = [
@@ -27,8 +30,9 @@ export default function YouTube() {
   const [busy, setBusy] = useState(false);
   const [comments, setComments] = useState<CommentsByVideo | null>(null);
   const [commentsBusy, setCommentsBusy] = useState(false);
-  const [insights, setInsights] = useState<YouTubeInsights | null>(null);
-  const [insightsBusy, setInsightsBusy] = useState(false);
+  const laya = useAnalysisTask(workspace?.id);   // CSV -> task queue -> model machine -> result
+  const [comparison, setComparison] = useState<AdComparison | null>(null);
+  const [compareBusy, setCompareBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   async function submit(e: FormEvent) {
@@ -36,7 +40,8 @@ export default function YouTube() {
     if (q.trim().length < 2) return setError("Enter a keyword or paste a YouTube link.");
     setError("");
     setComments(null);
-    setInsights(null);
+    laya.clear();
+    setComparison(null);
     setBusy(true);
     try { setResult(await api.youtubeSearch(workspace!.id, q.trim(), limit, order, language)); }
     catch (err) { setError((err as Error).message); }
@@ -63,16 +68,24 @@ export default function YouTube() {
 
   async function runLaya(csv: Blob, filename: string) {
     setError("");
-    setInsightsBusy(true);
-    try { setInsights(await api.youtubeInsights(workspace!.id, csv, filename)); }
-    catch (err) { setError((err as Error).message); }
-    finally { setInsightsBusy(false); }
+    await laya.start(csv, filename);
   }
 
   // Same CSV as the download, sent straight to the Laya model
   async function analyse() {
     const byVideo = comments ?? await loadComments();
     if (byVideo) await runLaya(new Blob([buildCsv(videos, byVideo)], { type: "text/csv" }), "youtube.csv");
+  }
+
+  // Ranks this search's ads and shows why the best beat the worst (3 free quota units)
+  async function compare() {
+    setError("");
+    setCompareBusy(true);
+    try {
+      const q = result!.mode === "search" ? result!.query : "";
+      setComparison(await api.youtubeCompare(workspace!.id, result!.videos.map((v) => v.video_id), q));
+    } catch (err) { setError((err as Error).message); }
+    finally { setCompareBusy(false); }
   }
 
   // A CSV downloaded earlier, analysed without searching again (no YouTube quota used)
@@ -99,7 +112,7 @@ export default function YouTube() {
         </div>
         <div className="head-actions">
           <input ref={fileInput} type="file" accept=".csv,text/csv" hidden onChange={analyseFile} />
-          <button className="secondary" onClick={() => fileInput.current?.click()} disabled={insightsBusy}>
+          <button className="secondary" onClick={() => fileInput.current?.click()} disabled={laya.busy}>
             Analyse a saved CSV
           </button>
           {videos.length > 0 && (
@@ -107,8 +120,12 @@ export default function YouTube() {
               <button className="secondary" onClick={download} disabled={commentsBusy}>
                 {commentsBusy ? "Preparing CSV…" : "Download CSV"}
               </button>
-              <button className="primary inline" onClick={analyse} disabled={commentsBusy || insightsBusy}>
-                {insightsBusy ? "Laya is reading comments…" : "Analyse with Laya"}
+              <button className="secondary" onClick={compare} disabled={compareBusy || videos.length < 2}
+                title={videos.length < 2 ? "Needs at least 2 videos" : undefined}>
+                {compareBusy ? "Comparing… (can take 30s)" : "Best vs worst ad"}
+              </button>
+              <button className="primary inline" onClick={analyse} disabled={commentsBusy || laya.busy}>
+                {laya.busy ? "Laya is analysing…" : "Analyse with Laya"}
               </button>
             </>
           )}
@@ -134,7 +151,7 @@ export default function YouTube() {
             <div className="field">
               <label htmlFor="yt-limit">Results</label>
               <select id="yt-limit" value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
-                {[10, 25, 50].map((n) => <option key={n} value={n}>{n}</option>)}
+                {[5, 10, 25, 50].map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
             </div>
             <div className="field">
@@ -160,7 +177,11 @@ export default function YouTube() {
         </section>
       )}
 
-      {insights && <LayaInsights data={insights} />}
+      {comparison && <BestVsWorst data={comparison} />}
+
+      {laya.busy && <LayaLoading status={laya.status} startedAt={laya.startedAt} />}
+      {laya.error && <div className="alert error" role="alert">{laya.error}</div>}
+      {laya.result && <LayaInsights data={laya.result} />}
 
       {result && (
         <section className="card">

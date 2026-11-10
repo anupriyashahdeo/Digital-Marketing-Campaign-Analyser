@@ -4,6 +4,7 @@ import { api, type Dashboard as Data } from "../api/client";
 import RunsTable from "../components/RunsTable";
 import Tile from "../components/Tile";
 import NewRunForm from "../features/runs/NewRunForm";
+import ViewerInterestCard from "../features/youtube/ViewerInterestCard";
 import { usePoll } from "../hooks/usePoll";
 import { fmtNum, fmtUsd } from "../lib/format";
 import { useWorkspace } from "../workspace/WorkspaceContext";
@@ -23,7 +24,7 @@ export default function Dashboard() {
 
   if (error && !data) return <div className="alert error" role="alert">{error}</div>;
   if (!data) return <p className="muted">Loading dashboard…</p>;
-  if (data.stats.total_runs === 0) return <Welcome canEdit={data.can_edit} />;
+  if (data.stats.total_runs === 0 && !data.viewer_interest) return <Welcome canEdit={data.can_edit} />;
 
   const s = data.stats;
   return (
@@ -46,6 +47,8 @@ export default function Dashboard() {
         <Tile label="Spend this month" value={fmtUsd(s.spent_this_month_usd)}
           note={`Cap ${fmtUsd(s.run_spend_cap_usd)} per analysis`} />
       </section>
+
+      {data.viewer_interest && <ViewerInterestCard data={data.viewer_interest} />}
 
       <section className="card">
         <div className="card-head">
